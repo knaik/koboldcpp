@@ -9,6 +9,9 @@
 #include "llama.h"
 
 #include "ggml.h"
+#ifdef GGML_USE_CUBLAS
+#include "ggml-cuda.h"
+#endif
 
 #include <array>
 #include <ctime>
@@ -824,6 +827,7 @@ struct llama_context_params llama_context_default_params() {
         /*.vocab_only                  =*/ false,
         /*.use_mmap                    =*/ true,
         /*.use_mlock                   =*/ false,
+		/*.gpu_layers                  =*/ 0,
         /*.embedding                   =*/ false,
         /*.progress_callback           =*/ nullptr,
         /*.progress_callback_user_data =*/ nullptr,
@@ -887,6 +891,7 @@ static void llama_model_load_internal(
         ggml_type memory_type,
         bool use_mmap,
         bool use_mlock,
+		int gpu_layers,
         bool vocab_only,
         llama_progress_callback progress_callback,
         void * progress_callback_user_data) {
@@ -980,6 +985,8 @@ static void llama_model_load_internal(
 
     // prepare memory for the weights
     {
+        const auto & hparams = model.hparams;
+
         const uint32_t n_embd  = hparams.n_embd;
         const uint32_t n_layer = hparams.n_layer;
         const uint32_t n_vocab = hparams.n_vocab;
@@ -1021,7 +1028,18 @@ static void llama_model_load_internal(
     ml->load_all_data(progress_callback, progress_callback_user_data, use_mlock ? &lctx.model.mlock_mmap : NULL);
 
     model.mapping = std::move(ml->mapping);
-
+#ifdef GGML_USE_CUBLAS
+    for (int i = 0; i < std::min(gpu_layers, int(hparams.n_layer)); ++i) {
+        auto & layer = model.layers[i];
+        ggml_cuda_transform_tensor(layer.wq);
+        ggml_cuda_transform_tensor(layer.wk);
+        ggml_cuda_transform_tensor(layer.wv);
+        ggml_cuda_transform_tensor(layer.wo);
+        ggml_cuda_transform_tensor(layer.w1);
+        ggml_cuda_transform_tensor(layer.w2);
+        ggml_cuda_transform_tensor(layer.w3);
+    }
+#endif
     // loading time will be recalculate after the first eval, so
     // we take page faults deferred by mmap() into consideration
     lctx.t_load_us = ggml_time_us() - lctx.t_start_us;
@@ -1034,11 +1052,12 @@ static bool llama_model_load(
         ggml_type memory_type,
         bool use_mmap,
         bool use_mlock,
+		int gpu_layers,
         bool vocab_only,
         llama_progress_callback progress_callback,
         void *progress_callback_user_data) {
     try {
-        llama_model_load_internal(fname, lctx, n_ctx, memory_type, use_mmap, use_mlock,
+        llama_model_load_internal(fname, lctx, n_ctx, memory_type, use_mmap, use_mlock, gpu_layers, 
                                   vocab_only, progress_callback, progress_callback_user_data);
         return true;
     } catch (const std::string & err) {
@@ -1060,13 +1079,6 @@ static bool llama_eval_internal(
             const int   n_tokens,
             const int   n_past,
             const int   n_threads) {
-
-    // enforce that the first token is BOS
-    if (n_past == 0 && tokens[0] != llama_token_bos()) {
-        fprintf(stderr, "%s: first token must be BOS\n", __func__);
-        // return false; //never fail. Not even in the face of Armageddon.
-    }
-
     const int64_t t_start_us = ggml_time_us();
 
     const int N = n_tokens;
@@ -1497,7 +1509,7 @@ static std::vector<llama_vocab::id> llama_tokenize(const llama_vocab & vocab, co
     }
 
     if (bos) {
-        output.push_back(llama_token_bos());
+        output.push_back(1);
     }
 
     tokenizer.tokenize(text, output);
@@ -2099,7 +2111,7 @@ struct llama_context * llama_init_from_file(
     ggml_type memory_type = params.f16_kv ? GGML_TYPE_F16 : GGML_TYPE_F32;
 
     if (!llama_model_load(path_model, *ctx, params.n_ctx, memory_type,
-                          params.use_mmap, params.use_mlock, params.vocab_only,
+                          params.use_mmap, params.use_mlock, params.gpu_layers, params.vocab_only,
                           params.progress_callback, params.progress_callback_user_data)) {
         fprintf(stderr, "%s: failed to load model\n", __func__);
         llama_free(ctx);
@@ -2743,14 +2755,11 @@ int llama_eval(
         fprintf(stderr, "%s: failed to eval\n", __func__);
         return 1;
     }
-
     // get a more accurate load time, upon first eval
-    // TODO: fix this
     if (!ctx->has_evaluated_once) {
         ctx->t_load_us = ggml_time_us() - ctx->t_start_us;
         ctx->has_evaluated_once = true;
     }
-
     return 0;
 }
 

@@ -421,8 +421,8 @@ struct llama_buffer {
     llama_buffer& operator=(llama_buffer&&) = delete;
 };
 
-#ifdef GGML_USE_CUBLAS
-#include "ggml-cuda.h"
+
+include "ggml-cuda.h"
 struct llama_ctx_buffer {
     uint8_t * addr = NULL;
     bool is_cuda;
@@ -467,8 +467,6 @@ struct llama_ctx_buffer {
     llama_ctx_buffer& operator=(const llama_ctx_buffer&) = delete;
     llama_ctx_buffer& operator=(llama_ctx_buffer&&) = delete;
 };
-#else
-typedef llama_buffer llama_ctx_buffer;
-#endif
+
 
 #endif

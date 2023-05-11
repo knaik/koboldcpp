@@ -242,6 +242,11 @@ extern "C" {
         GGML_TYPE_I32,
         GGML_TYPE_COUNT,
     };
+	
+	    enum ggml_backend {
+        GGML_BACKEND_CPU = 0,
+        GGML_BACKEND_CUDA = 1,
+    };
 
     // model file types
     enum ggml_ftype {
@@ -324,6 +329,7 @@ extern "C" {
     // n-dimensional tensor
     struct ggml_tensor {
         enum ggml_type type;
+		enum ggml_backend backend;
 
         int     n_dims;
         int64_t ne[GGML_MAX_DIMS]; // number of elements
@@ -354,7 +360,7 @@ extern "C" {
 
         char name[32];
 
-        char padding[8]; // TODO: remove and add padding to name?
+        char padding[9]; // TODO: remove and add padding to name?
     };
 
     // computation graph
